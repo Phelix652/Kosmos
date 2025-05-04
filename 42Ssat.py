@@ -1,74 +1,52 @@
-import requests
-from skyfield.api import load, EarthSatellite
-from skyfield.constants import AU_KM
+import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Button
 from mpl_toolkits.basemap import Basemap
+from skyfield.api import load, EarthSatellite
+from datetime import datetime
 
-# Your location coordinates
-my_lat = 16.8409
-my_lon = 96.1735
+# Streamlit config
+st.set_page_config(layout="wide")
+st.title("🌍 Live Satellite Tracker")
+st.markdown("Tracking **Kosmos 482** Satellite")
 
-# --- Fetch TLE Data Functions ---
-def get_tle_iss():
-    url = "https://celestrak.org/NORAD/elements/stations.txt"
-    response = requests.get(url)
-    lines = response.text.strip().split("\n")
-    for i in range(0, len(lines), 3):
-        if "ISS (ZARYA)" in lines[i]:
-            return lines[i], lines[i + 1], lines[i + 2]
-    raise ValueError("ISS not found!")
+# Input location
+col1, col2 = st.columns(2)
+with col1:
+    my_lat = st.number_input("Your Latitude", value=16.8409)
+with col2:
+    my_lon = st.number_input("Your Longitude", value=96.1735)
 
-def get_tle_noaa():
-    url = "https://celestrak.org/NORAD/elements/weather.txt"
-    response = requests.get(url)
-    lines = response.text.strip().split("\n")
-    for i in range(0, len(lines), 3):
-        if "NOAA 15" in lines[i]:
-            return lines[i], lines[i + 1], lines[i + 2]
-    raise ValueError("NOAA 15 not found!")
+# Kosmos 482 TLE data (hardcoded)
+name_kosmos = "Kosmos 482"
+tle1_kosmos = "1 06073U 72023B   24123.65777316  .00000803  00000+0  14121-3 0  9990"
+tle2_kosmos = "2 06073  51.5533 146.5134 5188798  22.7442 354.1140  5.44340810267680"
 
-def get_tle_tianmu():
-    url = "https://celestrak.org/NORAD/elements/weather.txt"
-    response = requests.get(url)
-    lines = response.text.strip().split("\n")
-    for i in range(0, len(lines), 3):
-        if "TIANMU-1 14" in lines[i]:
-            return lines[i], lines[i + 1], lines[i + 2]
-    raise ValueError("TIANMU-1 14 not found!")
-
-def get_tle_meteor():
-    url = "https://celestrak.org/NORAD/elements/weather.txt"
-    response = requests.get(url)
-    lines = response.text.strip().split("\n")
-    for i in range(0, len(lines), 3):
-        if "METEOR-M 2 4" in lines[i] or "METEOR-M2 4" in lines[i]:
-            return lines[i], lines[i + 1], lines[i + 2]
-    raise ValueError("METEOR-M2 4 not found!")
-
-# --- Load Satellites ---
+# Load time and satellite
 ts = load.timescale()
 
-name_iss, tle1_iss, tle2_iss = get_tle_iss()
-sat_iss = EarthSatellite(tle1_iss, tle2_iss, name_iss, ts)
+# Initialize crash_time variable
+crash_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-name_noaa, tle1_noaa, tle2_noaa = get_tle_noaa()
-sat_noaa = EarthSatellite(tle1_noaa, tle2_noaa, name_noaa, ts)
+# Try to load satellite, and handle when TLE data is invalid
+try:
+    sat_kosmos = EarthSatellite(tle1_kosmos, tle2_kosmos, name_kosmos, ts)
+    satellite_data_valid = True
+except Exception as e:
+    satellite_data_valid = False
+    error_message = "The Satellite has crashed and the TLE data is no longer available."
+    crash_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-name_tianmu, tle1_tianmu, tle2_tianmu = get_tle_tianmu()
-sat_tianmu = EarthSatellite(tle1_tianmu, tle2_tianmu, name_tianmu, ts)
-
-name_meteor, tle1_meteor, tle2_meteor = get_tle_meteor()
-sat_meteor = EarthSatellite(tle1_meteor, tle2_meteor, name_meteor, ts)
-
-# --- Get Satellite Position and Path ---
-def get_satellite_data(satellite):
+# Get current and path data
+def get_satellite_data(satellite, ts):
     time_now = ts.now()
     geocentric = satellite.at(time_now)
     subpoint = geocentric.subpoint()
     lat = subpoint.latitude.degrees
     lon = subpoint.longitude.degrees
+    alt = subpoint.elevation.km
+    velocity = geocentric.velocity.km_per_s
+    speed = np.linalg.norm(velocity)
 
     times = ts.utc(time_now.utc_datetime().year,
                    time_now.utc_datetime().month,
@@ -78,11 +56,11 @@ def get_satellite_data(satellite):
     lats = [pos.latitude.degrees for pos in positions]
     lons = [pos.longitude.degrees for pos in positions]
 
-    return lat, lon, lats, lons
+    return lat, lon, alt, speed, lats, lons
 
-# --- Create Map ---
+# Plotting
 fig, ax = plt.subplots(figsize=(12, 6))
-m = Basemap(projection='cyl', resolution='c')  # <- Fixed here
+m = Basemap(projection='cyl', resolution='c')
 m.drawcoastlines()
 m.drawcountries()
 m.drawmapboundary(fill_color='midnightblue')
@@ -90,111 +68,29 @@ m.fillcontinents(color='forestgreen', lake_color='darkgreen')
 m.drawparallels(np.arange(-90., 91., 30.))
 m.drawmeridians(np.arange(-180., 181., 60.))
 
-satellites = []
-
-# ISS
-lat_iss, lon_iss, path_lats_iss, path_lons_iss = get_satellite_data(sat_iss)
-x_iss, y_iss = m(lon_iss, lat_iss)
-scatter_iss = ax.scatter(x_iss, y_iss, color='yellow', s=100, label=name_iss)
-path_x_iss, path_y_iss = m(path_lons_iss, path_lats_iss)
-path_line_iss, = ax.plot(path_x_iss, path_y_iss, linestyle='--', color='yellow', visible=False)
-satellites.append({"scatter": scatter_iss, "path": path_line_iss})
-
-# NOAA 15
-lat_noaa, lon_noaa, path_lats_noaa, path_lons_noaa = get_satellite_data(sat_noaa)
-x_noaa, y_noaa = m(lon_noaa, lat_noaa)
-scatter_noaa = ax.scatter(x_noaa, y_noaa, color='red', s=100, label=name_noaa)
-path_x_noaa, path_y_noaa = m(path_lons_noaa, path_lats_noaa)
-path_line_noaa, = ax.plot(path_x_noaa, path_y_noaa, linestyle='--', color='red', visible=False)
-satellites.append({"scatter": scatter_noaa, "path": path_line_noaa})
-
-# TIANMU-1 14
-lat_tianmu, lon_tianmu, path_lats_tianmu, path_lons_tianmu = get_satellite_data(sat_tianmu)
-x_tianmu, y_tianmu = m(lon_tianmu, lat_tianmu)
-scatter_tianmu = ax.scatter(x_tianmu, y_tianmu, color='magenta', s=100, label=name_tianmu)
-path_x_tianmu, path_y_tianmu = m(path_lons_tianmu, path_lats_tianmu)
-path_line_tianmu, = ax.plot(path_x_tianmu, path_y_tianmu, linestyle='--', color='magenta', visible=False)
-satellites.append({"scatter": scatter_tianmu, "path": path_line_tianmu})
-
-# METEOR-M2 4
-lat_meteor, lon_meteor, path_lats_meteor, path_lons_meteor = get_satellite_data(sat_meteor)
-x_meteor, y_meteor = m(lon_meteor, lat_meteor)
-scatter_meteor = ax.scatter(x_meteor, y_meteor, color='lime', s=100, label=name_meteor)
-path_x_meteor, path_y_meteor = m(path_lons_meteor, path_lats_meteor)
-path_line_meteor, = ax.plot(path_x_meteor, path_y_meteor, linestyle='--', color='lime', visible=False)
-satellites.append({"scatter": scatter_meteor, "path": path_line_meteor})
-
 # Plot your location
 x_my, y_my = m(my_lon, my_lat)
-ax.scatter(x_my, y_my, color='white', marker='^', s=100, label="My Location")
+ax.scatter(x_my, y_my, color='white', marker='^', s=100, label="Your Location")
 
-# Tooltip annotation
-tooltip = ax.annotate(
-    "", xy=(0, 0), xytext=(20, 20), textcoords="offset points",
-    bbox=dict(boxstyle="round,pad=0.5", fc="black", alpha=0.7),
-    color='white', fontsize=9,
-    arrowprops=dict(arrowstyle="->", color='white')
-)
-tooltip.set_visible(False)
+if satellite_data_valid:
+    # Plot Kosmos 482 path and position
+    lat, lon, alt, speed, path_lats, path_lons = get_satellite_data(sat_kosmos, ts)
+    path_x, path_y = m(path_lons, path_lats)
+    ax.plot(path_x, path_y, linestyle='--', color='lime')
+    x, y = m(lon, lat)
+    ax.scatter(x, y, color='lime', edgecolor='black', s=100, zorder=5, label=sat_kosmos.name)
 
-# --- Hover Event to Show Paths + Tooltip ---
-def on_hover(event):
-    if event.inaxes == ax:
-        show = False
-        for i, sat in enumerate(satellites):
-            cont, _ = sat["scatter"].contains(event)
-            sat["path"].set_visible(cont)
-            if cont:
-                sat_obj = [sat_iss, sat_noaa, sat_tianmu, sat_meteor][i]
-                time_now = ts.now()
-                geocentric = sat_obj.at(time_now)
-                subpoint = geocentric.subpoint()
-                velocity = geocentric.velocity.km_per_s
-                speed = np.linalg.norm(velocity)
-                tooltip.xy = (event.xdata, event.ydata)
-                tooltip.set_text(
-                    f"{sat_obj.name}\nLat: {subpoint.latitude.degrees:.2f}°\n"
-                    f"Lon: {subpoint.longitude.degrees:.2f}°\nAlt: {subpoint.elevation.km:.1f} km\n"
-                    f"Speed: {speed:.2f} km/s"
-                )
-                tooltip.set_visible(True)
-                show = True
-        if not show:
-            tooltip.set_visible(False)
-        fig.canvas.draw_idle()
+    # Info
+    st.markdown(f"**{sat_kosmos.name}** — Lat: `{lat:.2f}°`, Lon: `{lon:.2f}°`, Alt: `{alt:.1f} km`, Speed: `{speed:.2f} km/s`")
+else:
+    # Display crash message with time
+    ax.text(0.5, 0.5, f"The Satellite has crashed\nAt: {crash_time}", color='red', fontsize=20, ha='center', va='center', transform=ax.transAxes)
 
-fig.canvas.mpl_connect('motion_notify_event', on_hover)
+ax.legend(loc='lower left', fontsize=9)
+st.pyplot(fig)
 
-# --- Reload Button ---
-def reload(event):
-    for sat in satellites:
-        sat["scatter"].remove()
-        sat["path"].remove()
-    satellites.clear()
+# Reload button
+if st.button("🔁 Reload Satellite Data"):
+    st.rerun()
 
-    # Redo same plotting logic
-    for sat_obj, color in zip(
-        [sat_iss, sat_noaa, sat_tianmu, sat_meteor],
-        ['yellow', 'red', 'magenta', 'lime']
-    ):
-        lat, lon, path_lats, path_lons = get_satellite_data(sat_obj)
-        x, y = m(lon, lat)
-        scatter = ax.scatter(x, y, color=color, s=100, label=sat_obj.name)
-        path_x, path_y = m(path_lons, path_lats)
-        path_line, = ax.plot(path_x, path_y, linestyle='--', color=color, visible=False)
-        satellites.append({"scatter": scatter, "path": path_line})
-
-    # Plot your location again
-    ax.scatter(x_my, y_my, color='white', marker='^', s=100, label="My Location")
-
-    plt.draw()
-
-# Button to reload
-ax_button = plt.axes([0.81, 0.01, 0.15, 0.045])
-button = Button(ax_button, 'Reload', color='white', hovercolor='grey')
-button.on_clicked(reload)
-
-# Legend
-ax.legend(loc='lower left', fontsize=10, framealpha=0.7, edgecolor='white')
-
-plt.show()
+st.markdown("Design by Mr Zay Bhone Aung")
